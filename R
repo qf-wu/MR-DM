@@ -1,0 +1,217 @@
+library(TwoSampleMR)
+library(readr)
+library(data.table)
+library(R.utils)
+library(tidyr)
+library(dplyr)
+library(MRPRESSO)
+library(LDlinkR)
+library(RadialMR)
+library(MendelianRandomization)
+exp_dat <- extract_instruments(outcome=csv_filename, clump=TRUE)
+exp_dat$r.exposure <- get_r_from_bsen(
+b = exp_dat$beta.exposure,
+se = exp_dat$se.exposure,
+n = N
+)
+exp_dat$R2 <- exp_dat$r.exposure^2
+exp_dat$F <- exp_dat$R2 * (N - 2) / (1 - exp_dat$R2)
+exp_dat <- exp_dat[exp_dat$F > Ffilter, ]
+merge <- merge(exp_dat, pe.finn, by.x="SNP", by.y="rsids")
+outcome_dat <- read_outcome_data(
+snps = exp_dat$SNP,
+filename = 'outcome.csv',
+sep = ',',
+snp_col = 'SNP',
+beta_col = 'beta',
+se_col = 'sebeta',
+effect_allele_col = 'alt',
+other_allele_col = 'ref',
+pval_col = 'pval'
+)
+outcome_dat$outcome <- 'Preeclampsia'
+mydata <- harmonise_data(
+exposure_dat = exp_dat,
+outcome_dat = outcome_dat,
+action = 2
+)
+mydata <- subset(mydata, pval.outcome >= 5e-08)
+RadialMR_r <- ivw_radial(r_input = mydata, alpha = 0.05, weights = 2, tol = 0.0001, summary = TRUE)
+outliers <- RadialMR_r$outliers$SNP
+mydata <- mydata[!mydata$SNP %in% outliers, ]
+presso <- run_mr_presso(mydata, NbDistribution = 1000, SignifThreshold = 0.05)
+mr_input <- mr_input(bx = mydata$beta.exposure,
+bxse = mydata$se.exposure,
+by = mydata$beta.outcome,
+byse = mydata$se.outcome,
+snps = mydata$SNP)
+ivw_fe_result <- mr_ivw(mr_input, model = "fixed")
+ivw_re_result <- mr_ivw(mr_input, model = "random")
+egger_result <- mr_egger(mr_input)
+wm_result <- mr_median(mr_input, weighting = "weighted")
+lasso_result <- mr_lasso(mr_input)
+mydata$mr_keep <- TRUE
+loo_result <- TwoSampleMR::mr_leaveoneout(mydata)
+calculate_heterogeneity <- function(b_exp, se_exp, b_out, se_out) {
+ratio <- b_out / b_exp
+ratio_se <- sqrt((se_out^2)/(b_exp^2) + (b_out^2 * se_exp^2)/(b_exp^4))
+weights <- 1/ratio_se^2
+beta_ivw <- sum(ratio * weights) / sum(weights)
+Q <- sum(weights * (ratio - beta_ivw)^2)
+df <- length(b_exp) - 1
+p_value <- pchisq(Q, df = df, lower.tail = FALSE)
+I_squared <- max(0, (Q - df)/Q * 100)
+return(list(
+Q = Q,
+df = df,
+p_value = p_value,
+I_squared = I_squared
+))
+}
+mr_heterogeneity(mydata)
+het_results <- calculate_heterogeneity(
+b_exp = mydata$beta.exposure,
+se_exp = mydata$se.exposure,
+b_out = mydata$beta.outcome,
+se_out = mydata$se.outcome
+)
+
+pe_data<-subset(pe.finn, pval<5e-06)
+exposure_dat<-read_exposure_data(filename="merge.csv",
+sep = ",",
+snp_col = "rsids",
+beta_col = "beta",
+se_col = "sebeta",
+effect_allele_col = "alt",
+other_allele_col = "ref",
+pval_col = "pval",
+samplesize_col = 268898,
+chr_col="#chrom",
+pos_col = "pos",
+clump = F)
+file.remove("merge.csv")
+exp_dat <- clump_data(
+exposure_dat,
+clump_kb = 10000,
+clump_r2 = 0.001,
+clump_p1 = 5e-6,
+clump_p2 = 5e-6
+)
+exp_dat$r.exposure <- get_r_from_bsen(
+b = exp_dat$beta.exposure,
+se = exp_dat$se.exposure,
+n = N
+)
+exp_dat$R2 <- exp_dat$r.exposure^2
+exp_dat$F <- exp_dat$R2 * (N - 2) / (1 - exp_dat$R2)
+exp_dat <- exp_dat[exp_dat$F > Ffilter, ]
+outcome_dat <- extract_outcome_data(exp_dat$SNP, outcomes = "ebi-a-GCST005536")
+outcome_dat_relaxed <- extract_outcome_data(
+snps = exp_dat$SNP,
+outcomes = "ebi-a-GCST005536",
+proxies = TRUE,
+rsq = 0.6,
+palindromes = 1,
+maf_threshold = 0.4
+)
+
+mydata <- harmonise_data(
+exposure_dat = exp_dat,
+outcome_dat = outcome_dat,
+action = 2
+)
+mydata <- subset(mydata, pval.outcome >= 5e-08)
+RadialMR_r <- ivw_radial(r_input = mydata, alpha = 0.05, weights = 2, tol = 0.0001, summary = TRUE)
+outliers <- RadialMR_r$outliers$SNP
+mydata <- mydata[!mydata$SNP %in% outliers, ]
+presso <- run_mr_presso(mydata, NbDistribution = 1000, SignifThreshold = 0.05)
+mr_input <- mr_input(bx = mydata$beta.exposure,
+bxse = mydata$se.exposure,
+by = mydata$beta.outcome,
+byse = mydata$se.outcome,
+snps = mydata$SNP)
+ivw_fe_result <- mr_ivw(mr_input, model = "fixed")
+ivw_re_result <- mr_ivw(mr_input, model = "random")
+egger_result <- mr_egger(mr_input)
+wm_result <- mr_median(mr_input, weighting = "weighted")
+lasso_result <- mr_lasso(mr_input)
+loo_result <- TwoSampleMR::mr_leaveoneout(mydata)
+run_mvmr_analysis <- function(exposure1_id, exposure2_id, exposure1_name, exposure2_name, output_file) {
+exp1_dat <- extract_instruments(
+outcome = exposure1_id,
+clump = TRUE,
+p1 = 5e-8,
+r2 = 0.001,
+kb = 10000
+)
+exp2_dat <- extract_instruments(
+outcome = exposure2_id,
+clump = TRUE,
+p1 = 5e-8,
+r2 = 0.001,
+kb = 10000
+)
+all_snps <- unique(c(exp1_dat$SNP, exp2_dat$SNP))
+exp1_effects <- extract_outcome_data(
+snps = all_snps,
+outcome = exposure1_id
+)
+exp2_effects <- extract_outcome_data(
+snps = all_snps,
+outcome = exposure2_id
+)
+outcome_data <- merge(pe.finn,
+data.frame(SNP = all_snps),
+by.x = "rsids",
+by.y = "SNP",
+all.y = TRUE)
+outcome_dat <- read_outcome_data(
+snps = all_snps,
+filename = 'outcome.csv',
+sep = ',',
+snp_col = 'rsids',
+beta_col = 'beta',
+se_col = 'sebeta',
+effect_allele_col = 'alt',
+other_allele_col = 'ref',
+pval_col = 'pval'
+)
+mvmr_data <- data.frame(SNP = all_snps)
+mvmr_data <- merge(mvmr_data,
+data.frame(SNP = exp1_effects$SNP,
+beta.exp1 = exp1_effects$beta.outcome,
+se.exp1 = exp1_effects$se.outcome),
+by = "SNP", all.x = TRUE)
+mvmr_data <- merge(mvmr_data,
+data.frame(SNP = exp2_effects$SNP,
+beta.exp2 = exp2_effects$beta.outcome,
+se.exp2 = exp2_effects$se.outcome),
+by = "SNP", all.x = TRUE)
+mvmr_data <- merge(mvmr_data,
+data.frame(SNP = outcome_dat$SNP,
+beta.outcome = outcome_dat$beta,
+se.outcome = outcome_dat$se),
+by = "SNP", all.x = TRUE)
+mvmr_data <- na.omit(mvmr_data)
+BXGs <- as.matrix(mvmr_data[, c("beta.exp1", "beta.exp2")])
+BYG <- mvmr_data$beta.outcome
+seBXGs <- as.matrix(mvmr_data[, c("se.exp1", "se.exp2")])
+seBYG <- mvmr_data$se.outcome
+mr_mv_input <- mr_mvinput(
+bx = BXGs,
+bxse = seBXGs,
+by = BYG,
+byse = seBYG
+)
+ivw_res <- mr_mvivw(mr_mv_input)
+median_res <- mr_mvmedian(mr_mv_input)
+egger_res <- mr_mvegger(mr_mv_input)
+lasso_res <- mr_mvlasso(mr_mv_input)
+return(final_results)
+}
+t1d_hba1c <- run_mvmr_analysis(t1d_id, hba1c_id, "T1D", "HbA1c", "mvmr_t1d_hba1c.csv")
+t1d_fi <- run_mvmr_analysis(t1d_id, fi_id, "T1D", "FI", "mvmr_t1d_fi.csv")
+t1d_bmi <- run_mvmr_analysis(t1d_id, bmi_id, "T1D", "BMI", "mvmr_t1d_bmi.csv")
+t2d_hba1c <- run_mvmr_analysis(t2d_id, hba1c_id, "T2D", "HbA1c", "mvmr_t2d_hba1c.csv")
+t2d_fi <- run_mvmr_analysis(t2d_id, fi_id, "T2D", "FI", "mvmr_t2d_fi.csv")
+t2d_bmi <- run_mvmr_analysis(t2d_id, bmi_id, "T2D", "BMI", "mvmr_t2d_bmi.csv")
